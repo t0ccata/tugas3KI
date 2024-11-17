@@ -43,16 +43,28 @@ def generate_keys():
 
 def encrypt(public_key, plaintext):
     e, n = public_key
-    plaintext_bytes = plaintext.encode('utf-8')
-    plaintext_int = int.from_bytes(plaintext_bytes, 'big')
+    
+    if isinstance(plaintext, bytes):
+        
+        plaintext_int = int.from_bytes(plaintext, 'big')
+    elif isinstance(plaintext, str):
+        
+        plaintext_bytes = plaintext.encode('utf-8')
+        plaintext_int = int.from_bytes(plaintext_bytes, 'big')
+    else:
+        raise ValueError("Plaintext must be a string or bytes")
+    
     ciphertext_int = pow(plaintext_int, e, n)
     return ciphertext_int
 
 def decrypt(private_key, ciphertext):
     d, n = private_key
-    plaintext_int = pow(ciphertext, d, n)
+    if isinstance(ciphertext, int):
+        plaintext_int = pow(ciphertext, d, n)
+    else:
+        raise ValueError("Ciphertext must be an integer")
     plaintext_bytes = plaintext_int.to_bytes((plaintext_int.bit_length() + 7) // 8, 'big')
-    return plaintext_bytes.decode('utf-8')
+    return plaintext_bytes
 
 def generate_des_key():
     
