@@ -3,64 +3,86 @@ from DES_CBC import des_cbc_decrypt_base64, des_cbc_encrypt_base64
 import RSA
 
 def server_program():
-    host = socket.gethostname()
+    host = '127.0.0.1'
     port = 6304  
 
     server_socket = socket.socket()
     server_socket.bind((host, port))  
+    print(f"DES Server started on {host}:{port}")
 
     server_socket.listen(2)
     conn, address = server_socket.accept()  
     print("Connection from: " + str(address))
 
-    
-    server_public_key, server_private_key = RSA.generate_keys()
-    
-    
-    conn.send(f"{server_public_key[0]} {server_public_key[1]}".encode())
-    
-    
-    client_public_key_data = conn.recv(1024).decode()
-    client_e, client_n = map(int, client_public_key_data.split())
-    
-    
-    encrypted_des_key = conn.recv(1024).decode()
-    if not encrypted_des_key:
-        print("No data received.")
-        return
-    
-    encrypted_des_key = int(encrypted_des_key)
-    
-    
-    decrypted_with_private = RSA.decrypt(server_private_key, encrypted_des_key)
-    
-    
-    if isinstance(decrypted_with_private, bytes):
-    
-        decrypted_with_private_int = int.from_bytes(decrypted_with_private, 'big')
-        des_key = RSA.decrypt((client_e, client_n), decrypted_with_private_int)
-    else:
-        raise ValueError("Decrypted result must be in bytes")
-    
-    iv = "initvect"   
+    try:
+        # Exchange public keys
+        server_public_key, server_private_key = RSA.generate_keys()
+        conn.send(f"{server_public_key[0]} {server_public_key[1]}".encode())
+        print("Sent server public key")
 
-    while True:
-        data = conn.recv(1024).decode()
-        if not data:
-            break
+        client_public_key_data = conn.recv(1024).decode()
+        if not client_public_key_data:
+            print("Failed to receive client's public key.")
+            return
 
-        print("Received from client (encrypted): " + data)
-        
-        
-        decrypted_message = des_cbc_decrypt_base64(data, des_key, iv)
-        print("Decrypted message from client:", decrypted_message)
+        print("Received client public key:", client_public_key_data)
+        client_e, client_n = map(int, client_public_key_data.split())
 
-        response = input("Enter response -> ")
-        
-        encrypted_response = des_cbc_encrypt_base64(response, des_key, iv)
-        conn.send(encrypted_response.encode())  
+        # Receive encrypted DES key
+        encrypted_des_key = conn.recv(1024).decode()
+        if not encrypted_des_key:
+            print("No DES key received.")
+            return
 
-    conn.close()  
+        print("Received encrypted DES key:", encrypted_des_key)
+
+        try:
+            import base64
+            # First decode base64 to bytes
+            encrypted_des_key_bytes = base64.b64decode(encrypted_des_key)
+            # Convert bytes to integer
+            encrypted_des_key_int = int.from_bytes(encrypted_des_key_bytes, 'big')
+            # Decrypt the DES key
+            des_key = RSA.decrypt(server_private_key, encrypted_des_key_int)
+
+            print("DES key successfully decrypted")
+            
+            # Communication loop
+            iv = "initvect"   
+            print("\nWaiting for messages...")
+            
+            while True:
+                try:
+                    encrypted_message = conn.recv(1024).decode()
+                    if not encrypted_message:
+                        print("Connection closed by client")
+                        break
+
+                    print(f"\nReceived encrypted message: {encrypted_message}")
+                    decrypted_message = des_cbc_decrypt_base64(encrypted_message, des_key, iv)
+                    print(f"Decrypted message: {decrypted_message}")
+
+                    response = input("Enter response -> ")
+                    if response.lower().strip() in ['exit', 'quit', 'bye']:
+                        break
+                        
+                    encrypted_response = des_cbc_encrypt_base64(response, des_key, iv)
+                    conn.send(encrypted_response.encode())
+                    print("Response sent")
+
+                except Exception as e:
+                    print(f"Error in message exchange: {str(e)}")
+                    break
+
+        except Exception as e:
+            print(f"Error processing DES key: {str(e)}")
+            return
+
+    except Exception as e:
+        print(f"Server error: {str(e)}")
+    finally:
+        conn.close()
+        print("\nConnection closed")
 
 if __name__ == '__main__':
     server_program()
