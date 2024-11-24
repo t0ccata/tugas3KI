@@ -3,6 +3,7 @@ import random
 from base64 import b64encode, b64decode
 import os
 import threading
+import time
 
 def gcd(a, b):
     while b != 0:
@@ -80,50 +81,80 @@ def des_decrypt(key, ciphertext):
     
     return ciphertext
 
-# Dictionary to store public keys with client identifiers
-public_keys = {}
+class PKAServer:
+    def __init__(self):
+        self.public_keys = {}
+        self.pka_public_key, self.pka_private_key = generate_keys()
+        print("PKA Server keys generated")
+        
+    def store_public_key(self, client_id, public_key):
+        self.public_keys[client_id] = {
+            'key': public_key,
+            'timestamp': time.time()
+        }
+        print(f"Stored public key for {client_id}")
+        print(f"Current keys stored: {list(self.public_keys.keys())}")
+        
+    def get_public_key(self, client_id):
+        if client_id in self.public_keys:
+            key_data = self.public_keys[client_id]
+            if time.time() - key_data['timestamp'] <= 7200:  # 2 hour validity
+                return key_data['key']
+        return None
 
-def store_public_key(client_id, public_key):
-    public_keys[client_id] = public_key
+def handle_client_connection(conn, addr, pka_server):
+    print(f"New connection from {addr}")
+    try:
+        # Receive client ID
+        client_id = conn.recv(1024).decode()
+        print(f"Client ID received: {client_id}")
+        
+        # Receive public key
+        public_key_data = conn.recv(1024).decode()
+        e, n = map(int, public_key_data.split())
+        pka_server.store_public_key(client_id, (e, n))
+        
+        # Send acknowledgment
+        conn.send("Public key stored successfully".encode())
+        
+        # Handle key requests
+        while True:
+            request = conn.recv(1024).decode()
+            if not request:
+                break
+                
+            if request == "GET_PUBLIC_KEY":
+                target_id = conn.recv(1024).decode()
+                print(f"Request for {target_id}'s public key from {client_id}")
+                target_key = pka_server.get_public_key(target_id)
+                
+                if target_key:
+                    response = f"{target_key[0]} {target_key[1]}"
+                    conn.send(response.encode())
+                    print(f"Sent {target_id}'s public key")
+                else:
+                    conn.send("Public key not found".encode())
+                    print(f"Public key not found for {target_id}")
+            
+            elif request == "EXIT":
+                break
+                
+    except Exception as e:
+        print(f"Error handling client {addr}: {e}")
+    finally:
+        conn.close()
 
-def get_public_key(client_id):
-    return public_keys.get(client_id)
-
-def handle_client_connection(conn, addr):
-    print(f"Connection from: {addr}")
-    client_id = conn.recv(1024).decode()
-    public_key_data = conn.recv(1024).decode()
-    e, n = map(int, public_key_data.split())
-    store_public_key(client_id, (e, n))
-    print(f"Stored public key for client {client_id}")
-    
-    # Send acknowledgment to client
-    conn.send("Public key stored successfully".encode())
-
-    while True:
-        request = conn.recv(1024).decode()
-        if request == "GET_PUBLIC_KEY":
-            target_client_id = conn.recv(1024).decode()
-            target_public_key = get_public_key(target_client_id)
-            if target_public_key:
-                conn.send(f"{target_public_key[0]} {target_public_key[1]}".encode())
-            else:
-                conn.send("Public key not found".encode())
-        elif request == "EXIT":
-            break
-
-    conn.close()
-
-def run_pka_server(host='127.0.0.1', port=6305):  # Change from localhost
+def run_pka_server(host='127.0.0.1', port=6305):
+    pka_server = PKAServer()
     server_socket = socket.socket()
     server_socket.bind((host, port))
     server_socket.listen(5)
-    print(f"Public Key Authority server running on {host}:{port}")
+    print(f"PKA Server running on {host}:{port}")
 
     while True:
         conn, addr = server_socket.accept()
-        client_handler = threading.Thread(target=handle_client_connection, args=(conn, addr))
-        client_handler.start()
+        thread = threading.Thread(target=handle_client_connection, args=(conn, addr, pka_server))
+        thread.start()
 
 if __name__ == "__main__":
     run_pka_server()
