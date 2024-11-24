@@ -92,7 +92,7 @@ def client_program():
                 client_socket.send(encrypted_message.encode())
                 
                 # Wait for server response with timeout
-                client_socket.settimeout(5)
+                client_socket.settimeout(20)
                 try:
                     encrypted_response = client_socket.recv(1024).decode()
                     if encrypted_response:
@@ -114,5 +114,5 @@ def client_program():
         except:
             pass
 
-if __name__ == '__main__':
+if __name__ == '_main_':
     client_program()

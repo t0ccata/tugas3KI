@@ -6,11 +6,10 @@ def server_program():
     host = '127.0.0.1'
     port = 6304  
 
-    server_socket = socket.socket()
-    server_socket.bind((host, port))  
-    print(f"DES Server started on {host}:{port}")
-
-    server_socket.listen(2)
+    server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server_socket.bind((host, port))
+    server_socket.listen(5)
+    print(f"Server listening on {host}:{port}")
     while True:
         conn, address = server_socket.accept()  
         print("Connection from: " + str(address))
@@ -109,5 +108,5 @@ def server_program():
             pka_socket.close()
             print("\nConnection closed")
 
-if __name__ == '__main__':
+if __name__ == '_main_':
     server_program()

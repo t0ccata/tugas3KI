@@ -31,12 +31,12 @@ def generate_prime():
             return num
 
 def generate_keys():
-    p = generate_prime()
-    q = generate_prime()
+    p = 61
+    q = 53
     n = p * q
     phi = (p - 1) * (q - 1)
     
-    e = 65537  
+    e = 17
     while gcd(e, phi) != 1:
         e = random.randint(2, phi)
 
