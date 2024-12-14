@@ -1,118 +1,102 @@
 import socket
-import time
-from DES_CBC import des_cbc_encrypt_base64, des_cbc_decrypt_base64  
-import RSA
+from DES import des_encrypt as des_enc, des_decrypt as des_dec, key as des_key
+from RSA import rsa_encrypt as rsa_enc, rsa_decrypt as rsa_dec
+from PKA import (
+    create_random_num as gen_rand_num, 
+    get_server_pub_key as req_srv_pub_key, 
+    pka_pub_key as pka_pub_key, 
+    validate_signature as verify_sig, 
+    sign_data as sign_k
+)
 
-def client_program():
-    pka_host = '127.0.0.1'
-    pka_port = 6305
-    des_host = '127.0.0.1'
-    des_port = 6304
+# Kunci untuk Klien
+client_pub_key = (2537, 13)  # (n, e)
+client_priv_key = (2537, 937)  # (n, d)
 
-    try:
-        # First connect to PKA with timeout
-        print("Connecting to PKA server...")
-        pka_socket = socket.socket()
-        pka_socket.settimeout(5)  # Add 5 second timeout
-        try:
-            pka_socket.connect((pka_host, pka_port))
-        except socket.error as e:
-            print(f"Failed to connect to PKA server: {e}")
-            print("Make sure PKA server (RSA.py) is running first")
-            return
-        
-        # Reset timeout after connection
-        pka_socket.settimeout(None)
-        
-        # Continue with existing code...
-        client_id = "client1"
-        client_public_key, client_private_key = RSA.generate_keys()
-        
-        print("Sending registration to PKA...")
-        pka_socket.send(client_id.encode())
-        pka_socket.send(f"{client_public_key[0]} {client_public_key[1]}".encode())
-        
-        # Add timeout for receiving acknowledgment
-        pka_socket.settimeout(5)
-        try:
-            ack = pka_socket.recv(1024).decode()
-        except socket.timeout:
-            print("Timeout waiting for PKA server response")
-            return
-            
-        if ack != "Public key stored successfully":
-            print("Failed to register with PKA")
-            return
-            
-        # Connect to DES server
-        print("\nConnecting to DES server...")
-        client_socket = socket.socket()
-        client_socket.connect((des_host, des_port))
-        
-        # Send handshake request
-        handshake = "HANDSHAKE_REQUEST"
-        client_socket.send(handshake.encode())
-        
-        # Get server's public key from PKA
-        pka_socket.send("GET_PUBLIC_KEY".encode())
-        pka_socket.send("server1".encode())
-        server_public_key_data = pka_socket.recv(1024).decode()
-        
-        if server_public_key_data == "Public key not found":
-            print("Server public key not found in PKA")
-            return
-            
-        server_e, server_n = map(int, server_public_key_data.split())
-        
-        # Generate and encrypt DES key
-        des_key = RSA.generate_des_key()
-        encrypted_des_key = RSA.encrypt((server_e, server_n), des_key)
-        
-        # Send encrypted DES key to server
-        client_socket.send(str(encrypted_des_key).encode())
-        
-        session_start = time.time()
-        iv = "initvect"
-        
-        print("Handshake completed, starting secure communication...")
-        
-        while True:
-            # Check session timeout (2 hours = 7200 seconds)
-            if time.time() - session_start > 7200:
-                print("Session expired. Need to perform handshake again.")
-                break
-                
-            message = input(" -> ")
-            if message.lower().strip() == 'bye':
-                break
-                
-            try:
-                encrypted_message = des_cbc_encrypt_base64(message, des_key, iv)
-                print("Sending encrypted message:", encrypted_message)
-                client_socket.send(encrypted_message.encode())
-                
-                # Wait for server response with timeout
-                client_socket.settimeout(20)
-                try:
-                    encrypted_response = client_socket.recv(1024).decode()
-                    if encrypted_response:
-                        decrypted_response = des_cbc_decrypt_base64(encrypted_response, des_key, iv)
-                        print("Server response:", decrypted_response)
-                except socket.timeout:
-                    print("No response from server")
-                    
-            except Exception as e:
-                print(f"Error sending message: {str(e)}")
-                break
+def run_client():
+    host_name = socket.gethostname()  
+    srv_port = 5050  
 
-    except Exception as e:
-        print(f"Error: {str(e)}")
-    finally:
-        try:
-            pka_socket.close()
-            client_socket.close()
-        except:
-            pass
+    client_sock = socket.socket()  
+    client_sock.connect((host_name, srv_port))
 
-if __name__ == '_main_':
-    client_program()
+    serialized_srv_key, srv_signature = req_srv_pub_key()
+    print("Dapatkan kunci publik server (dari PKA): ", serialized_srv_key)
+    print("Dapatkan tanda tangan (dari PKA): ", srv_signature)
+
+    if verify_sig(serialized_srv_key, srv_signature, pka_pub_key):
+        print("Kunci publik server berhasil diverifikasi.")
+        print("Kunci publik server yang diterima: ", serialized_srv_key)
+
+        srv_key_parts = serialized_srv_key.split(":")
+        srv_pub_key = (int(srv_key_parts[0]), int(srv_key_parts[1]))
+        print("Kunci Publik Server yang Diverifikasi:", srv_pub_key)
+        
+    else:
+        print("Verifikasi gagal. Tutup koneksi.")
+        client_sock.close()
+        return
+
+    encrypted_nonce1 = list(map(int, client_sock.recv(1024).decode().split(',')))
+    print("Terima encrypted N1 (Dari server): ", encrypted_nonce1)
+
+    decrypted_nonce1 = rsa_dec(encrypted_nonce1, client_priv_key)
+    print("Dekripsi N1:", decrypted_nonce1)
+
+    nonce2 = gen_rand_num()
+    print("Nomor acak N2: ", nonce2)
+
+    enc_nonce1_back = rsa_enc(decrypted_nonce1, srv_pub_key)
+    print("Encrypt ulang N1: ", enc_nonce1_back)
+    enc_nonce1_back_str = ','.join(map(str, enc_nonce1_back))
+
+    enc_nonce2 = rsa_enc(str(nonce2), srv_pub_key)
+    print("Encrypt N2: ", enc_nonce2)
+    enc_nonce2_str = ','.join(map(str, enc_nonce2))
+
+    client_sock.send(enc_nonce1_back_str.encode())
+    client_sock.send(enc_nonce2_str.encode())
+    print("Status: N1 dan N2 terkirim ke server")
+
+    srv_response = list(map(int, client_sock.recv(1024).decode().split(',')))
+    print("Terima encrypted N2 dari server: ", srv_response)
+    decrypted_nonce2 = rsa_dec(srv_response, client_priv_key)
+    print("Dekripsi N2 dari server: ", decrypted_nonce2)
+
+    if decrypted_nonce2 == str(nonce2):
+        print("Handshaking berhasil!")
+    else:
+        print("Handshaking gagal!")
+        client_sock.close()
+        return
+
+    print("Des Key diperoleh: ", des_key)
+    signed_des_key, des_sig = sign_k(des_key, client_priv_key)
+    des_key_str = str(signed_des_key)
+    des_sig_str = ','.join(map(str, des_sig))
+        
+    client_sock.send(des_key_str.encode())
+    client_sock.send(des_sig_str.encode())
+
+    enc_des_key = rsa_enc(des_key, srv_pub_key)
+    print("Encrypted Des Key: ", enc_des_key)
+    enc_des_key_str = ','.join(map(str, enc_des_key))
+    client_sock.send(enc_des_key_str.encode())
+
+    while True:
+        msg = input("Masukkan pesan: ")
+        if msg.lower().strip() == 'stop':
+            break
+        enc_msg_sent = des_enc(msg, des_key)
+        client_sock.send(enc_msg_sent.encode())
+        data = client_sock.recv(1024).decode()
+        decrypted_data = des_dec(data, des_key)
+        enc_bin_msg = ''.join(format(ord(c), '08b') for c in data)
+        print("Pesan terenkripsi dari server (biner):", enc_bin_msg)
+        print("Pesan dari server (setelah dekripsi): " + decrypted_data)
+
+    client_sock.close()
+
+
+if __name__ == '__main__':
+    run_client()
