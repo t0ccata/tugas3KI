@@ -1,112 +1,118 @@
 import socket
-from DES_CBC import des_cbc_decrypt_base64, des_cbc_encrypt_base64
-import RSA
+from DES import des_encrypt, des_decrypt
+from RSA import rsa_encrypt, rsa_decrypt
+from PKA import create_random_num, validate_signature, pka_pub_key, get_client_pub_key
+
+# Kunci 
+server_public_key = (3233, 17)
+server_private_key = (3233, 2753)
 
 def server_program():
-    host = '127.0.0.1'
-    port = 6304  
+    host = socket.gethostname()  # Mendapatkan nama host
+    port = 5050  # Menetapkan nomor port di atas 1024
 
-    server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    server_socket.bind((host, port))
-    server_socket.listen(5)
-    print(f"Server listening on {host}:{port}")
+    server_socket = socket.socket()  # Membuat instance socket
+    server_socket.bind((host, port))  # Mengikat alamat host dan port bersama
+
+    server_socket.listen(1)
+    print("Server sedang mendengarkan...")
+
+    conn, address = server_socket.accept()  # Menerima koneksi baru
+    print("Koneksi dari: " + str(address))
+
+    # Server meminta kunci publik klien dari PKA
+    serialized_key, signature = get_client_pub_key()
+    print("Menerima kunci publik klien (dari PKA): ", serialized_key)
+    print("Menerima Tanda Tangan (dari PKA): ", signature)
+
+    # Memverifikasi tanda tangan menggunakan kunci publik PKA
+    if validate_signature(serialized_key, signature, pka_pub_key):
+        print("Kunci publik klien berhasil diverifikasi.")
+
+        client_key_parts = serialized_key.split(":")
+        client_public_key = (int(client_key_parts[0]), int(client_key_parts[1]))
+        print("Kunci Publik Klien yang Diverifikasi:", client_public_key)
+
+    else:
+        print("Gagal memverifikasi kunci publik klien. Menghentikan koneksi.")
+        conn.close()
+        return
+
+    # Memulai protokol handshake
+    
+    N1 = create_random_num()
+    print("Menghasilkan nomor acak N1: ", N1)
+    encrypted_N1 = rsa_encrypt(str(N1), client_public_key)
+    print("Encrypted N1:", encrypted_N1)
+
+    encrypted_N1 = ','.join(map(str, encrypted_N1))
+    conn.send(encrypted_N1.encode())
+    print("Status: Mengirim encrypted N1 ke klien dan menunggu respons dari klien")
+
+    received_encrypted_N1 = list(map(int, conn.recv(1024).decode().split(',')))
+    print("Menerima Encrypted N1 (dari klien): ", received_encrypted_N1)
+
+    received_encrypted_N2 = list(map(int, conn.recv(1024).decode().split(',')))
+    print("Encrypted N2 (dari klien): ", received_encrypted_N2)
+
+    decrypted_N2 = rsa_decrypt(received_encrypted_N2, server_private_key)
+    print("Mendekripsi N2: ", decrypted_N2)
+
+    encrypted_N2_back = rsa_encrypt(str(decrypted_N2), client_public_key)
+    print("Encrypted N2: ", encrypted_N2_back)
+    encrypted_N2_back = ','.join(map(str, encrypted_N2_back))
+    conn.send(encrypted_N2_back.encode())
+    print("Status: Mengirim N2 kembali ke klien")
+
+    decrypted_N1_back = rsa_decrypt(received_encrypted_N1, server_private_key)
+    print("Mendekripsi N1: ", decrypted_N1_back)
+    if decrypted_N1_back == str(N1):
+        print("Handshake berhasil!")
+    else:
+        print("Handshake gagal!")
+        conn.close()
+        return
+
+    
+    des_key = conn.recv(1024).decode()
+    des_signature_str = conn.recv(1024).decode()
+    des_signature = [int(x) for x in des_signature_str.split(',')]
+
+    received_encrypted_des_key = list(map(int, conn.recv(1024).decode().split(',')))
+    print("Menerima Encrypted Des Key (dari klien): ", received_encrypted_des_key)
+
+    decrypted_des_key = rsa_decrypt(received_encrypted_des_key, server_private_key)
+    print("Mendekripsi Des Key yang Diterima: ", decrypted_des_key)
+
+    # Memverifikasi tanda tangan menggunakan kunci publik klien
+    if validate_signature(des_key, des_signature, client_public_key):
+        print("Des key berhasil diverifikasi.")
+
+    else:
+        print("Gagal memverifikasi kunci Des. Menghentikan koneksi.")
+        conn.close()
+        return
+
+    
     while True:
-        conn, address = server_socket.accept()  
-        print("Connection from: " + str(address))
+        data = conn.recv(1024).decode()  # Menerima pesan terenkripsi dari klien
+        if not data:
+            break
 
-        try:
-            # Get PKA's public key first
-            pka_socket = socket.socket()
-            pka_socket.connect((host, 6305))
-            
-            # Register server's keys with PKA
-            server_id = "server1"
-            server_public_key, server_private_key = RSA.generate_keys()
-            
-            pka_socket.send(server_id.encode())
-            pka_socket.send(f"{server_public_key[0]} {server_public_key[1]}".encode())
-            
-            ack = pka_socket.recv(1024).decode()
-            if ack != "Public key stored successfully":
-                print("Failed to register with PKA")
-                return
+        # Mendekripsi data yang diterima
+        encrypted_binary = ''.join(format(ord(c), '08b') for c in data)
+        print("Pesan terenkripsi yang diterima dari Klien (biner) :", encrypted_binary)
 
-            # Receive handshake request from client
-            handshake_request = conn.recv(1024).decode()
-            
-            # Get client's public key from PKA
-            pka_socket.send("GET_PUBLIC_KEY".encode())
-            pka_socket.send("client1".encode())
-            client_public_key_data = pka_socket.recv(1024).decode()
-            
-            if client_public_key_data == "Public key not found":
-                print("Client public key not found in PKA")
-                return
-                
-            client_e, client_n = map(int, client_public_key_data.split())
+        decrypted_message = des_decrypt(data, des_key)
+        print("Diterima dari klien (setelah dekripsi): " + decrypted_message)
 
-            # Receive encrypted DES key
-            encrypted_des_key = conn.recv(1024).decode()
-            if not encrypted_des_key:
-                print("No DES key received.")
-                return
+        # Mendapatkan balasan server, mengenkripsi, dan mengirimkannya kembali ke klien
+        server_reply = input("masukkan pesan: ")
+        encrypted_reply = des_encrypt(server_reply, des_key)
+        conn.send(encrypted_reply.encode())  
 
-            print("Received encrypted DES key:", encrypted_des_key)
+    conn.close()  
 
-            try:
-                import base64
-                # First decode base64 to bytes
-                encrypted_des_key_bytes = base64.b64decode(encrypted_des_key)
-                # Convert bytes to integer
-                encrypted_des_key_int = int.from_bytes(encrypted_des_key_bytes, 'big')
-                # Decrypt the DES key
-                des_key = RSA.decrypt(server_private_key, encrypted_des_key_int)
 
-                print("DES key successfully decrypted")
-                
-                # Communication loop
-                iv = "initvect"   
-                print("\nWaiting for messages...")
-                
-                while True:
-                    try:
-                        # Clear receive buffer
-                        conn.settimeout(1)  # Add timeout for receiving messages
-                        encrypted_message = conn.recv(1024).decode().strip()
-                        
-                        if encrypted_message:
-                            print(f"\nReceived encrypted message: {encrypted_message}")
-                            try:
-                                decrypted_message = des_cbc_decrypt_base64(encrypted_message, des_key, iv)
-                                print(f"Decrypted message: {decrypted_message}")
-
-                                response = input("Enter response -> ")
-                                if response.lower().strip() in ['exit', 'quit', 'bye']:
-                                    break
-                                    
-                                encrypted_response = des_cbc_encrypt_base64(response, des_key, iv)
-                                conn.send(encrypted_response.encode())
-                                print("Response sent")
-                            except Exception as e:
-                                print(f"Error processing message: {str(e)}")
-                                continue
-                        
-                    except socket.timeout:
-                        continue
-                    except Exception as e:
-                        print(f"Connection error: {str(e)}")
-                        break
-
-            except Exception as e:
-                print(f"Error processing DES key: {str(e)}")
-                return
-
-        except Exception as e:
-            print(f"Server error: {str(e)}")
-        finally:
-            conn.close()
-            pka_socket.close()
-            print("\nConnection closed")
-
-if __name__ == '_main_':
+if __name__ == '__main__':
     server_program()
